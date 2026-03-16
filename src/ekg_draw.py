@@ -7,11 +7,13 @@ from tkinter.scrolledtext import ScrolledText
 import os
 import glob
 import sys
+import json
+
 def wizualizuj_sygnaly(sciezki_do_plikow):
     if not sciezki_do_plikow:
         return
 
-    fig = plt.figure(figsize=(12, 6))
+    fig = plt.figure(figsize=(24, 6))
     ax = plt.gca()
     
     lines_info = []
@@ -36,6 +38,15 @@ def wizualizuj_sygnaly(sciezki_do_plikow):
                                 y.append(val)
                             except ValueError:
                                 continue
+                x = list(range(len(y)))
+            elif ext.lower() == '.json':
+                y = []
+                with open(sciezka_do_pliku, 'r', encoding='utf-8') as f:
+                    dane_json = json.load(f)
+                    if 'data' in dane_json:
+                        for pomiar in dane_json['data']:
+                            if 'ecg' in pomiar and 'Samples' in pomiar['ecg']:
+                                y.extend(pomiar['ecg']['Samples'])
                 x = list(range(len(y)))
             else:
                 df = pd.read_excel(sciezka_do_pliku, header=0)
@@ -219,7 +230,7 @@ def uruchom_gui():
 
     for root_dir, dirs, files in os.walk(project_root):
         for file in files:
-            if file.lower().endswith(('.xlsx', '.xls', '.txt')):
+            if file.lower().endswith(('.xlsx', '.xls', '.txt', '.json')):
                 pelna_sciezka = os.path.join(root_dir, file)
                 pliki_mapa.append(pelna_sciezka)
                 listbox.insert(tk.END, os.path.relpath(pelna_sciezka, project_root))
