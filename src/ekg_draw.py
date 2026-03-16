@@ -7,154 +7,201 @@ from tkinter.scrolledtext import ScrolledText
 import os
 import glob
 import sys
-def wizualizuj_sygnaly(sciezka_do_pliku):
-    try:
-        _, ext = os.path.splitext(sciezka_do_pliku) # type: ignore
+def wizualizuj_sygnaly(sciezki_do_plikow):
+    if not sciezki_do_plikow:
+        return
 
-        if ext.lower() == '.txt':
-            y = []
-            with open(sciezka_do_pliku, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line: continue
-                    try:
-                        val = float(line)
-                        y.append(val)
-                    except ValueError:
-                        continue
-            x = list(range(len(y)))
+    fig = plt.figure(figsize=(12, 6))
+    ax = plt.gca()
+    
+    lines_info = []
+    y_min_global = float('inf')
+    y_max_global = float('-inf')
 
-        else:
-            df = pd.read_excel(sciezka_do_pliku, header=0)
+    for sciezka_do_pliku in sciezki_do_plikow:
+        nazwa_pliku = os.path.basename(sciezka_do_pliku)
+        try:
+            _, ext = os.path.splitext(sciezka_do_pliku)
 
-            x = df.iloc[:, 2] 
-            y = df.iloc[:, 1]
+            if ext.lower() == '.txt':
+                y = []
+                with open(sciezka_do_pliku, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line: continue
+                        values_str = line.split()
+                        for val_str in values_str:
+                            try:
+                                val = float(val_str)
+                                y.append(val)
+                            except ValueError:
+                                continue
+                x = list(range(len(y)))
+            else:
+                df = pd.read_excel(sciezka_do_pliku, header=0)
+                x = df.iloc[:, 2].tolist()
+                y = df.iloc[:, 1].tolist()
 
-        fig = plt.figure(figsize=(12, 6))
-        ax = plt.gca()
+            if len(y) == 0:
+                print(f"Pominięto plik '{nazwa_pliku}': brak danych.")
+                continue
+
+            y_min = min(y)
+            y_max = max(y)
+
+            if abs(y_max - y_min) < 1e-6:
+                print(f"Pominięto plik '{nazwa_pliku}': sygnał płaski (flatline).")
+                continue
+
+            y_min_global = min(y_min_global, y_min)
+            y_max_global = max(y_max_global, y_max)
+
+            window_size = 50
+            y_series = pd.Series(y)
+            y_smoothed = y_series.rolling(window=window_size, center=True, min_periods=1).mean().tolist()
+
+            line, = plt.plot(x, y, linewidth=0.8, label=f'{nazwa_pliku} (Oryginał)', picker=5)
+
+            lines_info.append({
+                'nazwa': nazwa_pliku,
+                'line_obj': line,
+                'oryginalny_y': y,
+                'wygladzony_y': y_smoothed
+            })
+
+        except FileNotFoundError:
+            print(f"Błąd: Nie znaleziono pliku '{nazwa_pliku}'. Sprawdź ścieżkę.")
+        except Exception as e:
+            print(f"Błąd podczas wczytywania '{nazwa_pliku}': {e}")
+
+    if not lines_info:
+        messagebox.showinfo("Brak Danych", "Żaden z wybranych plików nie zawiera poprawnych danych do wizualizacji.")
+        plt.close()
+        return
+
+    rozpietosc = y_max_global - y_min_global
+    margines = rozpietosc * 0.15
+    if rozpietosc == 0: margines = 1
+    plt.ylim(y_min_global - margines, y_max_global + margines)
+
+    plt.xlabel('Numer pomiaru (LP) / Oś X', fontsize=12)
+    plt.ylabel('Amplituda / Wartość', fontsize=12)
+    
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    plt.legend()
+    
+    plt.subplots_adjust(bottom=0.2)
+
+    # --- Tooltip ---
+    annot = ax.annotate("", xy=(0,0), xytext=(15,15), textcoords="offset points",
+                        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=1, alpha=0.9),
+                        arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"))
+    annot.set_visible(False)
+
+    def update_annot(ind, line_dict):
+        line = line_dict['line_obj']
+        x_data = line.get_xdata()
+        y_data = line.get_ydata()
+        idx = ind["ind"][0]
+        pos_x, pos_y = x_data[idx], y_data[idx]
+        annot.xy = (pos_x, pos_y)
         
-        if len(y) == 0:
-            messagebox.showinfo("Brak Danych", f"Plik '{os.path.basename(sciezka_do_pliku)}' nie zawiera danych do wizualizacji.")
-            plt.close()
+        try:
+            if isinstance(pos_x, (int, float)) and float(pos_x).is_integer():
+                text = f"Plik: {line_dict['nazwa']}\nLP: {int(pos_x)}\nWartość: {float(pos_y):.4f}"
+            else:
+                text = f"Plik: {line_dict['nazwa']}\nOś X: {float(pos_x):.4f}\nWartość: {float(pos_y):.4f}"
+        except Exception:
+            text = f"Plik: {line_dict['nazwa']}\nX: {pos_x}\nY: {pos_y}"
+        annot.set_text(text)
+
+    def hover(event):
+        if event.button is not None:
             return
-
-        y_min = min(y)
-        y_max = max(y)
-
-        if abs(y_max - y_min) < 1e-6:
-            messagebox.showinfo("Sygnał Płaski", f"Sygnał w pliku '{os.path.basename(sciezka_do_pliku)}' jest stały (flatline) i nie wymaga wizualizacji.")
-            plt.close()
-            return
-
-        window_size = 50
-        y_series = pd.Series(y)
-        y_smoothed = y_series.rolling(window=window_size, center=True, min_periods=1).mean()
-
-        line, = plt.plot(x, y, color='blue', linewidth=0.8, label='Sygnał (Oryginalny)', picker=5)
-
-        rozpietosc = y_max - y_min
-        margines = rozpietosc * 0.15
-        plt.ylim(y_min - margines, y_max + margines)
-
-        plt.xlabel('Numer pomiaru (LP)', fontsize=12)
-        plt.ylabel('Amplituda / Wartość', fontsize=12)
         
-        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-        
-        plt.legend()
-        
-        plt.subplots_adjust(bottom=0.2)
-
-        # --- Tooltip (interaktywne wartości na wykresie) ---
-        annot = ax.annotate("", xy=(0,0), xytext=(15,15), textcoords="offset points",
-                            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=1, alpha=0.9),
-                            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"))
-        annot.set_visible(False)
-
-        def update_annot(ind):
-            x_data = line.get_xdata()
-            y_data = line.get_ydata()
-            idx = ind["ind"][0]
-            pos_x, pos_y = x_data[idx], y_data[idx]
-            annot.xy = (pos_x, pos_y)
-            
-            try:
-                if float(pos_x).is_integer():
-                    text = f"LP: {int(pos_x)}\nWartość: {float(pos_y):.4f}"
-                else:
-                    text = f"Oś X: {float(pos_x):.4f}\nWartość: {float(pos_y):.4f}"
-            except Exception:
-                text = f"X: {pos_x}\nY: {pos_y}"
-            annot.set_text(text)
-
-        def hover(event):
-            # Ignoruj eventy podczas wciśniętego przycisku myszy (np. przy przesuwaniu lub powiększaniu)
-            if event.button is not None:
-                return
-            
-            if event.inaxes == ax:
+        is_hovering = False
+        if event.inaxes == ax:
+            for line_dict in lines_info:
+                line = line_dict['line_obj']
                 cont, ind = line.contains(event)
                 if cont:
-                    update_annot(ind)
+                    update_annot(ind, line_dict)
                     annot.set_visible(True)
                     fig.canvas.draw_idle()
-                else:
-                    if annot.get_visible():
-                        annot.set_visible(False)
-                        fig.canvas.draw_idle()
-
-        fig.canvas.mpl_connect("motion_notify_event", hover)
-        # ---------------------------------------------------
-
-        def zapisz_wykres(event):
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(script_dir)
-            screenshots_dir = os.path.join(project_root, "screeny")
-            os.makedirs(screenshots_dir, exist_ok=True)
-
-            base_name = os.path.splitext(os.path.basename(sciezka_do_pliku))[0]
-            save_path = os.path.join(screenshots_dir, f"{base_name}.png")
-            
-            # Ukrywamy przyciski na moment zapisu
-            ax_button.set_visible(False)
-            ax_smooth_button.set_visible(False)
-            
-            fig.savefig(save_path)
-            
-            # Przywracamy przyciski
-            ax_button.set_visible(True)
-            ax_smooth_button.set_visible(True)
-            
-            messagebox.showinfo("Zapisano Wykres", f"Wykres został zapisany jako '{os.path.basename(save_path)}' w folderze 'screeny'.")
-
-        ax_button = plt.axes([0.72, 0.03, 0.2, 0.075])
-        przycisk_zapisu = Button(ax_button, 'Zapisz jako PNG')
-        przycisk_zapisu.on_clicked(zapisz_wykres)
-
-        is_smoothed = False
-        def toggle_smooth(event):
-            nonlocal is_smoothed
-            is_smoothed = not is_smoothed
-            if is_smoothed:
-                line.set_ydata(y_smoothed)
-                line.set_label('Sygnał (Wygładzony)')
-                przycisk_wygladzania.label.set_text('Przywróć oryginał')
-            else:
-                line.set_ydata(y)
-                line.set_label('Sygnał (Oryginalny)')
-                przycisk_wygladzania.label.set_text('Wygładź sygnał')
-            ax.legend()
+                    is_hovering = True
+                    break
+        
+        if not is_hovering and annot.get_visible():
+            annot.set_visible(False)
             fig.canvas.draw_idle()
 
-        ax_smooth_button = plt.axes([0.48, 0.03, 0.2, 0.075])
-        przycisk_wygladzania = Button(ax_smooth_button, 'Wygładź sygnał')
-        przycisk_wygladzania.on_clicked(toggle_smooth)
-        plt.show()
+    fig.canvas.mpl_connect("motion_notify_event", hover)
+    # ---------------
 
-    except FileNotFoundError:
-        print(f"Błąd: Nie znaleziono pliku o nazwie '{sciezka_do_pliku}'. Sprawdź ścieżkę.")
-    except Exception as e:
-        print(f"Wystąpił nieoczekiwany błąd: {e}")
+    def zapisz_wykres(event):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        screenshots_dir = os.path.join(project_root, "screeny")
+        os.makedirs(screenshots_dir, exist_ok=True)
+
+        if len(lines_info) == 1:
+            base_name = os.path.splitext(lines_info[0]['nazwa'])[0]
+        else:
+            base_name = "Wykres_zbiorczy_" + "_".join([os.path.splitext(l['nazwa'])[0][:5] for l in lines_info])[:30]
+
+        save_path = os.path.join(screenshots_dir, f"{base_name}.png")
+        
+        ax_button.set_visible(False)
+        ax_smooth_button.set_visible(False)
+        fig.savefig(save_path)
+        
+        ax_button.set_visible(True)
+        ax_smooth_button.set_visible(True)
+        messagebox.showinfo("Zapisano Wykres", f"Wykres został zapisany jako '{os.path.basename(save_path)}' w folderze 'screeny'.")
+
+    ax_button = plt.axes([0.72, 0.03, 0.2, 0.075])
+    przycisk_zapisu = Button(ax_button, 'Zapisz jako PNG')
+    przycisk_zapisu.on_clicked(zapisz_wykres)
+
+    is_smoothed = False
+    def toggle_smooth(event):
+        nonlocal is_smoothed
+        is_smoothed = not is_smoothed
+        
+        y_min_curr = float('inf')
+        y_max_curr = float('-inf')
+        
+        for line_dict in lines_info:
+            line = line_dict['line_obj']
+            if is_smoothed:
+                line.set_ydata(line_dict['wygladzony_y'])
+                line.set_label(f"{line_dict['nazwa']} (Wygładzony)")
+                new_y = line_dict['wygladzony_y']
+            else:
+                line.set_ydata(line_dict['oryginalny_y'])
+                line.set_label(f"{line_dict['nazwa']} (Oryginał)")
+                new_y = line_dict['oryginalny_y']
+            
+            y_min_curr = min(y_min_curr, min(new_y))
+            y_max_curr = max(y_max_curr, max(new_y))
+
+        if is_smoothed:
+            przycisk_wygladzania.label.set_text('Przywróć oryginał')
+        else:
+            przycisk_wygladzania.label.set_text('Wygładź sygnał')
+        
+        rozp = y_max_curr - y_min_curr
+        marg = rozp * 0.15
+        if rozp == 0: marg = 1
+        ax.set_ylim(y_min_curr - marg, y_max_curr + marg)
+        ax.legend()
+        fig.canvas.draw_idle()
+
+    ax_smooth_button = plt.axes([0.48, 0.03, 0.2, 0.075])
+    przycisk_wygladzania = Button(ax_smooth_button, 'Wygładź sygnał')
+    przycisk_wygladzania.on_clicked(toggle_smooth)
+
+    plt.show()
 
 def uruchom_gui():
     root = tk.Tk()
@@ -163,7 +210,7 @@ def uruchom_gui():
 
     tk.Label(root, text="Wybierz plik danych z folderu:").pack(pady=10)
 
-    listbox = tk.Listbox(root)
+    listbox = tk.Listbox(root, selectmode=tk.MULTIPLE)
     listbox.pack(expand=True, fill="both", padx=20, pady=5)
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -180,11 +227,11 @@ def uruchom_gui():
     def on_click():
         sel = listbox.curselection()
         if not sel:
-            messagebox.showwarning("Uwaga", "Zaznacz plik z listy!")
+            messagebox.showwarning("Uwaga", "Zaznacz przynajmniej jeden plik z listy!")
             return
-        index = sel[0]
-        plik = pliki_mapa[index]
-        wizualizuj_sygnaly(plik)
+        
+        wybrane_pliki = [pliki_mapa[i] for i in sel]
+        wizualizuj_sygnaly(wybrane_pliki)
 
     tk.Button(root, text="Rysuj Wykres", command=on_click, height=2, bg="#e1e1e1").pack(pady=20)
 
